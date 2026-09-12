@@ -1,9 +1,11 @@
 #include <windows.h>
 #include <shellapi.h>
+#include <wincrypt.h>
 #include <string>
 
 #pragma comment(linker, "/SUBSYSTEM:WINDOWS")
 #pragma comment(linker, "/MANIFESTUAC:level='requireAdministrator'")
+#pragma comment(lib, "Crypt32.lib")
 
 int WINAPI WinMain(
     HINSTANCE,
@@ -72,65 +74,65 @@ ForEach-Object {
 Restart-Service Audiosrv -Force
 )PS";
 
-    // Получаем путь к PowerShell, встроенному в Windows
+    // Размер исходной PowerShell-команды в байтах
+    DWORD inputLength =
+        static_cast<DWORD>(wcslen(psCommand) * sizeof(wchar_t));
+
+    // Узнаём необходимый размер Base64
+    DWORD encodedLength = 0;
+
+    if (!CryptBinaryToStringW(
+        reinterpret_cast<const BYTE*>(psCommand),
+        inputLength,
+        CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF,
+        nullptr,
+        &encodedLength))
+    {
+        return 1;
+    }
+
+    std::wstring encodedCommand(encodedLength, L'\0');
+
+    // Кодируем PowerShell в Base64
+    if (!CryptBinaryToStringW(
+        reinterpret_cast<const BYTE*>(psCommand),
+        inputLength,
+        CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF,
+        &encodedCommand[0],
+        &encodedLength))
+    {
+        return 1;
+    }
+
+    encodedCommand.resize(encodedLength);
+
     wchar_t powershellPath[MAX_PATH];
 
-    GetSystemDirectoryW(powershellPath, MAX_PATH);
+    GetSystemDirectoryW(
+        powershellPath,
+        MAX_PATH
+    );
 
     lstrcatW(
         powershellPath,
         L"\\WindowsPowerShell\\v1.0\\powershell.exe"
     );
 
-    /*
-        PowerShell -EncodedCommand требует Base64
-        от UTF-16LE строки.
-    */
+    std::wstring parameters =
+        L"-NoProfile "
+        L"-NonInteractive "
+        L"-ExecutionPolicy Bypass "
+        L"-WindowStyle Hidden "
+        L"-EncodedCommand ";
 
-    int byteCount = static_cast<int>(wcslen(psCommand) * sizeof(wchar_t));
-
-    DWORD base64Length = 0;
-
-    CryptStringToBinaryW(
-        reinterpret_cast<const wchar_t*>(psCommand),
-        byteCount,
-        CRYPT_STRING_BASE64,
-        nullptr,
-        &base64Length,
-        nullptr,
-        nullptr
-    );
-
-    std::wstring encoded;
-    encoded.resize(base64Length);
-
-    CryptStringToBinaryW(
-        reinterpret_cast<const wchar_t*>(psCommand),
-        byteCount,
-        CRYPT_STRING_BASE64,
-        reinterpret_cast<BYTE*>(&encoded[0]),
-        &base64Length,
-        nullptr,
-        nullptr
-    );
-
-    encoded.resize(base64Length);
-
-    std::wstring params =
-        L"-NoProfile -NonInteractive -ExecutionPolicy Bypass "
-        L"-WindowStyle Hidden -EncodedCommand ";
-
-    params += encoded;
+    parameters += encodedCommand;
 
     SHELLEXECUTEINFOW sei = {};
+
     sei.cbSize = sizeof(sei);
-
-    // Запуск с повышенными правами
     sei.lpVerb = L"runas";
-
     sei.lpFile = powershellPath;
-    sei.lpParameters = params.c_str();
-
+    sei.lpParameters = parameters.c_str();
     sei.nShow = SW_HIDE;
 
     if (!ShellExecuteExW(&sei))
