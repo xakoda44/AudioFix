@@ -17,7 +17,7 @@ jobs:
       - name: Build AudioFix.exe
         shell: cmd
         run: |
-          cl.exe /nologo /EHsc /O2 /DUNICODE /D_UNICODE AudioFix.cpp /link /SUBSYSTEM:WINDOWS crypt32.lib
+          cl.exe /nologo /EHsc /O2 /DUNICODE /D_UNICODE AudioFix.cpp /link /SUBSYSTEM:WINDOWS /MANIFESTUAC:"level='requireAdministrator' uiAccess='false'" crypt32.lib shell32.lib
 
       - name: Upload AudioFix.exe
         uses: actions/upload-artifact@v4
