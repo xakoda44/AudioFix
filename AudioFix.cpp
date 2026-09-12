@@ -4,8 +4,8 @@
 #include <string>
 
 #pragma comment(linker, "/SUBSYSTEM:WINDOWS")
-#pragma comment(linker, "/MANIFESTUAC:level='requireAdministrator'")
 #pragma comment(lib, "Crypt32.lib")
+#pragma comment(lib, "Shell32.lib")
 
 int WINAPI WinMain(
     HINSTANCE,
