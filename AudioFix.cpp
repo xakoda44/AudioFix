@@ -2,41 +2,52 @@
 #include <shellapi.h>
 #include <wincrypt.h>
 #include <string>
+#include <fstream>
 
 #pragma comment(linker, "/SUBSYSTEM:WINDOWS")
 #pragma comment(lib, "Crypt32.lib")
 #pragma comment(lib, "Shell32.lib")
 
-int WINAPI WinMain(
-    HINSTANCE,
-    HINSTANCE,
-    LPSTR,
-    int
-)
+int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
 {
     const wchar_t* psCommand = LR"PS(
 $ErrorActionPreference = 'Stop'
 
-$LogonUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+$log = 'D:\AudioFix\AudioFix.log'
 
-Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render' |
-ForEach-Object {
+try {
 
-    $fxPath = Join-Path $_.PsPath 'FxProperties'
+    Add-Content $log "=============================="
+    Add-Content $log "AUDIO FIX START"
+    Add-Content $log "=============================="
+    Add-Content $log "USER: $([System.Security.Principal.WindowsIdentity]::GetCurrent().Name)"
+    Add-Content $log "ADMIN: $(([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))"
 
-    if (Test-Path $fxPath) {
+    $LogonUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 
-        $relativePath = $_.Name.Substring(19) + '\FxProperties'
+    $devices = Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render'
 
-        $key = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey(
-            $relativePath,
-            [Microsoft.Win32.RegistryKeyPermissionCheck]::ReadWriteSubTree,
-            [System.Security.AccessControl.RegistryRights]::ChangePermissions
-        )
+    Add-Content $log "DEVICES: $($devices.Count)"
 
-        if ($null -ne $key) {
+    foreach ($device in $devices) {
 
-            try {
+        $fxPath = Join-Path $device.PsPath 'FxProperties'
+
+        Add-Content $log "DEVICE: $($device.PSChildName)"
+        Add-Content $log "FXPATH: $fxPath"
+
+        if (Test-Path $fxPath) {
+
+            $relativePath = $device.Name.Substring(19) + '\FxProperties'
+
+            $key = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey(
+                $relativePath,
+                [Microsoft.Win32.RegistryKeyPermissionCheck]::ReadWriteSubTree,
+                [System.Security.AccessControl.RegistryRights]::ChangePermissions
+            )
+
+            if ($null -ne $key) {
+
                 $acl = $key.GetAccessControl()
 
                 $rule = New-Object System.Security.AccessControl.RegistryAccessRule(
@@ -49,36 +60,48 @@ ForEach-Object {
 
                 $acl.ResetAccessRule($rule)
                 $key.SetAccessControl($acl)
-            }
-            finally {
                 $key.Close()
+
+                Add-Content $log "PERMISSIONS OK"
+
+                Set-ItemProperty `
+                    -Path $fxPath `
+                    -Name '{1da5d803-d492-4edd-8c23-e0c0ffee7f0e},5' `
+                    -Type DWord `
+                    -Value 1 `
+                    -Force
+
+                Add-Content $log "PARAMETER 1 OK"
+
+                Set-ItemProperty `
+                    -Path $fxPath `
+                    -Name '{250e3ce7-95c2-46c7-8ea2-639b9f2040d2},0' `
+                    -Type DWord `
+                    -Value 1 `
+                    -Force
+
+                Add-Content $log "PARAMETER 2 OK"
             }
-
-            Set-ItemProperty `
-                -Path $fxPath `
-                -Name '{1da5d803-d492-4edd-8c23-e0c0ffee7f0e},5' `
-                -Type DWord `
-                -Value 1 `
-                -Force
-
-            Set-ItemProperty `
-                -Path $fxPath `
-                -Name '{250e3ce7-95c2-46c7-8ea2-639b9f2040d2},0' `
-                -Type DWord `
-                -Value 1 `
-                -Force
+            else {
+                Add-Content $log "ERROR: Registry key could not be opened"
+            }
         }
     }
-}
 
-Restart-Service Audiosrv -Force
+    Restart-Service Audiosrv -Force
+
+    Add-Content $log "AUDIO SERVICE RESTART OK"
+    Add-Content $log "AUDIO FIX FINISHED"
+}
+catch {
+    Add-Content $log "ERROR:"
+    Add-Content $log $_.Exception.ToString()
+}
 )PS";
 
-    // Размер исходной PowerShell-команды в байтах
     DWORD inputLength =
         static_cast<DWORD>(wcslen(psCommand) * sizeof(wchar_t));
 
-    // Узнаём необходимый размер Base64
     DWORD encodedLength = 0;
 
     if (!CryptBinaryToStringW(
@@ -88,19 +111,20 @@ Restart-Service Audiosrv -Force
         nullptr,
         &encodedLength))
     {
+        MessageBoxW(nullptr, L"Ошибка подготовки PowerShell.", L"AudioFix", MB_OK | MB_ICONERROR);
         return 1;
     }
 
     std::wstring encodedCommand(encodedLength, L'\0');
 
-    // Кодируем PowerShell в Base64
     if (!CryptBinaryToStringW(
         reinterpret_cast<const BYTE*>(psCommand),
         inputLength,
         CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF,
-        &encodedCommand[0],
+        reinterpret_cast<LPWSTR>(&encodedCommand[0]),
         &encodedLength))
     {
+        MessageBoxW(nullptr, L"Ошибка кодирования PowerShell.", L"AudioFix", MB_OK | MB_ICONERROR);
         return 1;
     }
 
@@ -108,10 +132,7 @@ Restart-Service Audiosrv -Force
 
     wchar_t powershellPath[MAX_PATH];
 
-    GetSystemDirectoryW(
-        powershellPath,
-        MAX_PATH
-    );
+    GetSystemDirectoryW(powershellPath, MAX_PATH);
 
     lstrcatW(
         powershellPath,
@@ -119,16 +140,12 @@ Restart-Service Audiosrv -Force
     );
 
     std::wstring parameters =
-        L"-NoProfile "
-        L"-NonInteractive "
-        L"-ExecutionPolicy Bypass "
-        L"-WindowStyle Hidden "
+        L"-NoProfile -NonInteractive -ExecutionPolicy Bypass "
         L"-EncodedCommand ";
 
     parameters += encodedCommand;
 
     SHELLEXECUTEINFOW sei = {};
-
     sei.cbSize = sizeof(sei);
     sei.lpVerb = L"runas";
     sei.lpFile = powershellPath;
@@ -137,13 +154,34 @@ Restart-Service Audiosrv -Force
 
     if (!ShellExecuteExW(&sei))
     {
+        MessageBoxW(
+            nullptr,
+            L"Не удалось запустить PowerShell с правами администратора.",
+            L"AudioFix",
+            MB_OK | MB_ICONERROR
+        );
+
         return 1;
     }
 
     if (sei.hProcess)
     {
         WaitForSingleObject(sei.hProcess, INFINITE);
+
+        DWORD exitCode = 0;
+        GetExitCodeProcess(sei.hProcess, &exitCode);
+
         CloseHandle(sei.hProcess);
+
+        if (exitCode != 0)
+        {
+            MessageBoxW(
+                nullptr,
+                L"PowerShell завершился с ошибкой.\n\nПроверь D:\\AudioFix\\AudioFix.log",
+                L"AudioFix",
+                MB_OK | MB_ICONERROR
+            );
+        }
     }
 
     return 0;
