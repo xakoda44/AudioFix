@@ -1,0 +1,26 @@
+name: Build AudioFix
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build AudioFix.exe
+        shell: cmd
+        run: |
+          cl.exe /nologo /EHsc /O2 /DUNICODE /D_UNICODE AudioFix.cpp /link /SUBSYSTEM:WINDOWS crypt32.lib
+
+      - name: Upload AudioFix.exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: AudioFix
+          path: AudioFix.exe
